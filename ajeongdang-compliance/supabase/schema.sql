@@ -61,18 +61,5 @@ drop policy if exists "ar all" on public.app_roles;
 create policy "ar all" on public.app_roles
   for all to anon, authenticated using (true) with check (true);
 
--- ---------- 4. (선택) 예시 심의 데이터 ----------
-insert into public.review_number
-  (category, review_no, title, media_type, product, applied_date, reviewed_date, result, valid_from, valid_to, applicant, approver, usages, note)
-values
-  ('사내준법', '아정당 준법심의필 제2025-0142호', '제휴카드 X 보험 크로스셀 블로그 포스팅', '블로그', '통신·렌탈 제휴카드 연계',
-   current_date - 18, current_date - 12, '승인', current_date - 12, current_date + 80, '정전략', '준법감시인',
-   '[{"channel":"블로그","url":"https://blog.naver.com/ajeongdang/223011"}]'::jsonb, null),
-  ('사내준법', '아정당 준법심의필 제2025-0139호', '다이렉트 보험 소개 유튜브 영상', '영상', '다이렉트 운전자보험',
-   current_date - 50, current_date - 44, '승인', current_date - 44, current_date + 18, '박기획', '준법감시인',
-   '[{"channel":"영상","url":"https://youtu.be/xxxxxxx"}]'::jsonb, '만료 임박'),
-  ('손보협회', '손보 2025-A-00891', '운전자보험 랜딩페이지', '랜딩페이지', '다이렉트 운전자보험 / B화재',
-   current_date - 70, current_date - 60, '조건부승인', current_date - 60, current_date + 120, '박기획', '준법감시인',
-   '[{"channel":"랜딩페이지","url":"https://event.ajeongdang.co.kr/driver"}]'::jsonb,
-   '[조건부] 보장한도 각주 추가·예시보험료 기준 명시 (기한 승인일+14일) / 이행보고 미제출')
-on conflict do nothing;
+-- ---------- 4. 예시(더미) 심의 데이터 ----------
+-- 제거함. 재실행 시 더미가 다시 생기지 않도록 seed insert 를 두지 않는다.

@@ -14,7 +14,7 @@ import { exportRows, downloadUploadTemplate, parseUploadFile } from "../lib/exce
  * RLS: authenticated 만 read/write (supabase/schema.sql 참고)
  */
 
-const ORG_PREFIX = "아정당 준법심의필"; // ← 주체명 변경 시 여기만 수정
+const ORG_PREFIX = "아정당인슈어런스 준법심의필"; // ← 주체명 변경 시 여기만 수정
 const FIXED_APPROVER = "유석일"; // 준법감시인(대행). 변경 시 여기만 수정
 
 const CATEGORIES = ["사내준법", "생보협회", "손보협회"];
@@ -113,10 +113,14 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
   const [openId, setOpenId] = useState(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(() => new Set()); // 일괄 삭제 선택(관리자 전용)
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setLoadError(null);
+    setSelected(new Set());
     const { data, error } = await supabase
       .from("review_number")
       .select("*")
@@ -128,9 +132,41 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
 
   useEffect(() => { load(); }, []);
 
+  // 등록된 심의번호 색인 (모달 실시간 중복 경고용)
+  const noIndex = useMemo(() => {
+    const m = new Map();
+    rows.forEach((r) => {
+      const n = (r.review_no || "").trim();
+      if (n && !m.has(n)) m.set(n, { id: r.id, title: r.title });
+    });
+    return m;
+  }, [rows]);
+
   const upsert = async (row) => {
     setSaving(true);
-    const fixed = { ...row, approver: FIXED_APPROVER };
+    const fixed = { ...row, approver: FIXED_APPROVER, review_no: (row.review_no || "").trim() };
+
+    // 심의번호 중복 최종 검증 — 서버 기준. 동시 등록·화면 미갱신 상태까지 차단.
+    if (fixed.review_no) {
+      const { data: clash, error: clashErr } = await supabase
+        .from("review_number").select("id,title").eq("review_no", fixed.review_no);
+      if (clashErr) {
+        alert("심의번호 중복 확인에 실패했습니다: " + clashErr.message + "\n등록을 중단합니다.");
+        setSaving(false);
+        return;
+      }
+      const other = (clash || []).find((c) => c.id !== fixed.id);
+      if (other) {
+        alert(
+          `이미 등록된 심의번호입니다.\n\n  ${fixed.review_no}\n  → 기존 등록: #${other.id} ${other.title}\n\n` +
+          `심의번호를 확인한 뒤 다시 등록하세요.`
+        );
+        setSaving(false);
+        await load(); // 최신 목록 반영
+        return;
+      }
+    }
+
     if (fixed.id == null) {
       const { error } = await supabase.from("review_number").insert(toDbRow(fixed));
       if (error) alert("저장 실패: " + error.message);
@@ -144,10 +180,23 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
   };
 
   const remove = async (id) => {
+    if (!isAdmin) return; // 권한 가드(RLS 미적용 환경이라 앱단에서 이중 확인)
     const { error } = await supabase.from("review_number").delete().eq("id", id);
     if (error) alert("삭제 실패: " + error.message);
     setConfirmId(null);
     await load();
+  };
+
+  const removeMany = async () => {
+    if (!isAdmin) return;
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    const { error } = await supabase.from("review_number").delete().in("id", ids);
+    setBulkDeleting(false);
+    if (error) { alert("일괄 삭제 실패: " + error.message); return; }
+    setConfirmBulk(false);
+    await load(); // load() 안에서 선택 초기화
   };
 
   // 탭(내부/외부)으로 1차 분류
@@ -174,6 +223,38 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
       return true;
     });
   }, [tabRows, q, fMedia, fStatus, onlyNoUrl]);
+
+  // ── 일괄 선택 (관리자 전용) ─────────────────────────────
+  const colCount = isAdmin ? 9 : 8; // 체크박스 열 유무에 따른 colSpan
+  const selectedCount = selected.size;
+  const allVisibleSelected = filtered.length > 0 && filtered.every((r) => selected.has(r.id));
+
+  const toggleOne = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+  const toggleAllVisible = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (filtered.every((r) => next.has(r.id))) filtered.forEach((r) => next.delete(r.id));
+      else filtered.forEach((r) => next.add(r.id));
+      return next;
+    });
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  // 필터/탭 변경으로 화면에서 사라진 건은 선택에서 제외 (보이지 않는 건 삭제 방지)
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(filtered.map((r) => r.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filtered]);
 
   const stats = useMemo(() => {
     let valid = 0, soon = 0, expired = 0, noUrl = 0;
@@ -270,7 +351,11 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
 
           <nav className="flex-1 space-y-1 px-3 py-2">
             {canEdit && (
-              <button onClick={() => setEditing(emptyRow(tab === "내부" ? INTERNAL_CAT : "생보협회"))}
+              <button onClick={() => {
+                const base = emptyRow(tab === "내부" ? INTERNAL_CAT : "생보협회");
+                // 내부심의는 다음 번호를 미리 채워 접두어 고정 형태를 그대로 보여준다
+                setEditing(tab === "내부" ? { ...base, review_no: nextInternalNo(rows) } : base);
+              }}
                 className="flex w-full items-center gap-2 rounded-lg bg-brand px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark">
                 <Plus size={16} /> 심의 등록
               </button>
@@ -361,12 +446,34 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
           </div>
         </div>
 
+        {/* 선택 액션바 (관리자 전용) */}
+        {isAdmin && selectedCount > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5">
+            <span className="text-sm font-semibold text-red-700">{selectedCount}건 선택</span>
+            <button onClick={clearSelection} className="text-xs font-medium text-slate-500 underline underline-offset-2 hover:text-slate-800">
+              선택 해제
+            </button>
+            <button onClick={() => setConfirmBulk(true)}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700">
+              <Trash2 size={13} /> 선택 {selectedCount}건 일괄 삭제
+            </button>
+          </div>
+        )}
+
         {/* 테이블 */}
         <div className="overflow-hidden rounded-xl bg-white ring-1 ring-slate-200">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {isAdmin && (
+                    <th className="w-9 px-3 py-3">
+                      <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible}
+                        disabled={filtered.length === 0}
+                        className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-red-600 disabled:cursor-not-allowed"
+                        title="현재 목록 전체 선택/해제" />
+                    </th>
+                  )}
                   <th className="w-8 px-2 py-3"></th>
                   <th className="px-3 py-3">담당자</th>
                   <th className="px-3 py-3">심의번호</th>
@@ -379,25 +486,33 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading && (
-                  <tr><td colSpan={8} className="px-4 py-14 text-center text-sm text-slate-400">불러오는 중…</td></tr>
+                  <tr><td colSpan={colCount} className="px-4 py-14 text-center text-sm text-slate-400">불러오는 중…</td></tr>
                 )}
                 {!loading && loadError && (
-                  <tr><td colSpan={8} className="px-4 py-14 text-center text-sm text-red-500">
+                  <tr><td colSpan={colCount} className="px-4 py-14 text-center text-sm text-red-500">
                     데이터를 불러오지 못했습니다: {loadError}
                   </td></tr>
                 )}
                 {!loading && !loadError && filtered.length === 0 && (
-                  <tr><td colSpan={8} className="px-4 py-14 text-center text-sm text-slate-400">
+                  <tr><td colSpan={colCount} className="px-4 py-14 text-center text-sm text-slate-400">
                     표시할 심의 건이 없습니다. 좌측 사이드바 "심의 등록"으로 추가하세요.
                   </td></tr>
                 )}
                 {!loading && filtered.map((r) => {
                   const st = deriveStatus(r);
                   const open = openId === r.id;
+                  const checked = selected.has(r.id);
                   return (
                     <React.Fragment key={r.id}>
-                      <tr className={`border-l-4 ${ROW_ACCENT[st.key]} cursor-pointer hover:bg-slate-50/70`}
+                      <tr className={`border-l-4 ${ROW_ACCENT[st.key]} cursor-pointer hover:bg-slate-50/70 ${checked ? "bg-red-50/60" : ""}`}
                         onClick={() => setOpenId(open ? null : r.id)}>
+                        {isAdmin && (
+                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input type="checkbox" checked={checked} onChange={() => toggleOne(r.id)}
+                              className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-red-600"
+                              title="일괄 삭제 대상 선택" />
+                          </td>
+                        )}
                         <td className="px-2 py-3 text-slate-400">
                           <ChevronDown size={16} className={`transition-transform ${open ? "rotate-180" : ""}`} />
                         </td>
@@ -446,7 +561,7 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
                       </tr>
                       {open && (
                         <tr className="bg-slate-50/60">
-                          <td colSpan={8} className="px-6 py-4">
+                          <td colSpan={colCount} className="px-6 py-4">
                             <div className="grid grid-cols-2 gap-x-8 gap-y-3 md:grid-cols-4">
                               <Detail label="상품 / 제휴사" value={r.product} />
                               <Detail label="신청일" value={r.applied_date} />
@@ -493,6 +608,7 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
         <p className="mt-4 text-xs text-slate-400">
           ※ 행을 클릭하면 상세가 펼쳐집니다. 사내준법 번호는 등록 시 자동 생성(수정 가능), 협회 번호는 수동 입력.
           만료임박·만료 건은 상단 배지에서 바로 필터링됩니다.
+          {isAdmin && " 좌측 체크박스로 여러 건을 선택해 일괄 삭제할 수 있습니다(관리자 전용, 현재 목록에 보이는 건만 대상)."}
         </p>
           </div>
         </main>
@@ -503,7 +619,8 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
       )}
 
       {editing && (
-        <EditModal initial={editing} saving={saving} onClose={() => setEditing(null)} onSave={upsert} suggestNo={() => nextInternalNo(rows)} />
+        <EditModal initial={editing} saving={saving} onClose={() => setEditing(null)} onSave={upsert}
+          suggestNo={() => nextInternalNo(rows)} existing={noIndex} />
       )}
 
       {uploadResult && (
@@ -524,6 +641,25 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
             )}
             <div className="mt-4 flex justify-end">
               <button onClick={() => setUploadResult(null)} className="rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-white hover:bg-brand-dark">확인</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmBulk && isAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+            <h3 className="text-base font-semibold text-slate-900">선택한 {selectedCount}건을 삭제할까요?</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              삭제하면 되돌릴 수 없습니다. 부여된 심의번호 이력 {selectedCount}건이 한 번에 사라집니다.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setConfirmBulk(false)} disabled={bulkDeleting}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">취소</button>
+              <button onClick={removeMany} disabled={bulkDeleting}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                {bulkDeleting ? "삭제 중…" : `${selectedCount}건 삭제`}
+              </button>
             </div>
           </div>
         </div>
@@ -564,11 +700,25 @@ function Select({ value, onChange, options }) {
   );
 }
 
-function EditModal({ initial, onClose, onSave, suggestNo, saving }) {
+function EditModal({ initial, onClose, onSave, suggestNo, saving, existing }) {
   const [f, setF] = useState(initial);
   const set = (k, v) => setF({ ...f, [k]: v });
   const isInternal = f.category === "사내준법";
-  const canSave = f.title.trim() && f.category && !saving;
+
+  // 구 형식 번호(예: 아정-준법-2026-…)는 접두어 고정에서 제외 — 기존 이력 보존
+  const legacyNo = Boolean(initial.review_no) && !initial.review_no.startsWith(ORG_PREFIX);
+  const lockPrefix = isInternal && !legacyNo;
+  const suffix = f.review_no.startsWith(ORG_PREFIX)
+    ? f.review_no.slice(ORG_PREFIX.length).replace(/^\s+/, "")
+    : f.review_no;
+  const setSuffix = (v) => set("review_no", v ? `${ORG_PREFIX} ${v}` : "");
+
+  // 이미 등록된 심의번호와 충돌하는지 실시간 확인 (자기 자신은 제외)
+  const noTrim = (f.review_no || "").trim();
+  const hit = noTrim ? existing?.get(noTrim) : null;
+  const dup = hit && hit.id !== f.id ? hit : null;
+
+  const canSave = f.title.trim() && f.category && !saving && !dup;
 
   const addUsage = () => setF({ ...f, usages: [...(f.usages || []), { channel: "블로그", url: "" }] });
   const updateUsage = (i, k, v) => { const next = [...f.usages]; next[i] = { ...next[i], [k]: v }; setF({ ...f, usages: next }); };
@@ -583,10 +733,22 @@ function EditModal({ initial, onClose, onSave, suggestNo, saving }) {
         </div>
         <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
           <Field label="심의구분"><Select value={f.category} onChange={(v) => set("category", v)} options={CATEGORIES} /></Field>
-          <Field label="심의번호">
+          <Field label="심의번호" full>
             <div className="flex gap-1.5">
-              <input value={f.review_no} onChange={(e) => set("review_no", e.target.value)}
-                placeholder={isInternal ? "자동 생성 가능" : "협회 부여 번호 입력"} className={inp} />
+              {lockPrefix ? (
+                <div className={`flex min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border bg-white ${dup ? "border-red-300" : "border-slate-200 focus-within:border-brand-400"}`}>
+                  <span className="shrink-0 select-none border-r border-slate-200 bg-slate-50 px-2.5 py-2 text-sm font-medium text-slate-500"
+                    title="주체명 고정 — 수정할 수 없습니다">
+                    {ORG_PREFIX}
+                  </span>
+                  <input value={suffix} onChange={(e) => setSuffix(e.target.value)}
+                    placeholder="제2026-0001호" className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none" />
+                </div>
+              ) : (
+                <input value={f.review_no} onChange={(e) => set("review_no", e.target.value)}
+                  placeholder={isInternal ? "구 형식 번호 — 자유 입력" : "협회 부여 번호 입력"}
+                  className={`${inp} ${dup ? "border-red-300" : ""}`} />
+              )}
               {isInternal && (
                 <button onClick={() => set("review_no", suggestNo())}
                   className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-brand-100 bg-brand-50 px-2 text-xs font-medium text-brand-700 hover:bg-brand-100" title="다음 번호 자동 생성">
@@ -594,6 +756,18 @@ function EditModal({ initial, onClose, onSave, suggestNo, saving }) {
                 </button>
               )}
             </div>
+            {dup ? (
+              <p className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 ring-1 ring-red-200">
+                <AlertTriangle size={13} className="mt-px shrink-0" />
+                <span>이미 등록된 심의번호입니다 — #{dup.id} “{dup.title}”. 번호를 확인한 뒤 다시 입력하세요. (등록 불가)</span>
+              </p>
+            ) : legacyNo && isInternal ? (
+              <p className="mt-1.5 text-[11px] text-amber-600">
+                구 형식 번호라 주체명 고정을 적용하지 않았습니다. 비우고 “생성”을 누르면 현행 형식으로 재부여됩니다.
+              </p>
+            ) : lockPrefix ? (
+              <p className="mt-1.5 text-[11px] text-slate-400">주체명은 고정입니다. 뒤 번호만 입력하세요(비우면 미부여로 저장).</p>
+            ) : null}
           </Field>
           <Field label="자료명" full><input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="광고물·게시물 제목" className={inp} /></Field>
           <Field label="대표 매체"><Select value={f.media_type} onChange={(v) => set("media_type", v)} options={MEDIA_TYPES} /></Field>

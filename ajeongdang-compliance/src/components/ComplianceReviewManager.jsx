@@ -14,7 +14,7 @@ import { exportRows, downloadUploadTemplate, parseUploadFile } from "../lib/exce
  * RLS: authenticated 만 read/write (supabase/schema.sql 참고)
  */
 
-const ORG_PREFIX = "아정당인슈어런스 준법심의필"; // ← 주체명 변경 시 여기만 수정
+const ORG_PREFIX = "아정인슈어런스 준법심의필"; // ← 주체명 변경 시 여기만 수정
 const FIXED_APPROVER = "유석일"; // 준법감시인(대행). 변경 시 여기만 수정
 
 const CATEGORIES = ["사내준법", "생보협회", "손보협회"];

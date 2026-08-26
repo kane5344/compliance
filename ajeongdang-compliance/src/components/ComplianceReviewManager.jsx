@@ -216,8 +216,10 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
         if (hasUrl) return false;
       }
       if (term) {
+        // 비고(note)는 검색 대상에서 제외한다. 번호 정정·폐기 이력처럼
+        // 옛 심의번호를 비고에 적어두면 폐기된 번호로 검색해도 그 행이 계속 잡힌다.
         const urls = (r.usages || []).map((u) => u.url).join(" ");
-        const hay = `${r.review_no} ${r.title} ${r.product} ${r.applicant} ${urls} ${r.note}`.toLowerCase();
+        const hay = `${r.review_no} ${r.title} ${r.product} ${r.applicant} ${urls}`.toLowerCase();
         if (!hay.includes(term)) return false;
       }
       return true;
@@ -412,7 +414,7 @@ export default function ComplianceReviewManager({ userEmail, role, adminEmail, o
           <div className="relative min-w-[200px] flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={q} onChange={(e) => setQ(e.target.value)}
-              placeholder="심의번호 · 자료명 · 상품 · 담당자 · URL · 비고 검색"
+              placeholder="심의번호 · 자료명 · 상품 · 담당자 · URL 검색"
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-400 focus:bg-white" />
           </div>
           <Filter size={16} className="text-slate-400" />

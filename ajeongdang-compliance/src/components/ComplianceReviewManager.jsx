@@ -25,13 +25,23 @@ const SUB_BADGE = {
   생보협회: { short: "생", cls: "bg-sky-100 text-sky-700" },
   손보협회: { short: "손", cls: "bg-violet-100 text-violet-700" },
 };
-const MEDIA_TYPES = ["블로그", "영상", "홈페이지", "랜딩페이지", "알림톡", "DM", "SMS", "전단", "스크립트", "기타"];
+const MEDIA_TYPES = ["블로그", "네이버카페", "영상", "유튜브", "홈페이지", "랜딩페이지", "알림톡", "DM", "SMS", "전단", "스크립트", "기타"];
 const RESULTS = ["심사중", "승인", "조건부승인", "부적합", "재심"];
 
 const EXPIRY_SOON_DAYS = 30;
 
 const iso = (d) => d.toISOString().slice(0, 10);
 const DATE_FIELDS = ["applied_date", "reviewed_date", "valid_from", "valid_to"];
+
+// 유효기간 시작일 → 1년 만기일(시작일 + 1년 - 1일). 예: 2026-09-03 → 2027-09-02
+function oneYearLater(from) {
+  if (!from) return "";
+  const d = new Date(`${from}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return "";
+  d.setFullYear(d.getFullYear() + 1);
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function nextInternalNo(rows) {
   const year = new Date().getFullYear();
@@ -705,6 +715,8 @@ function Select({ value, onChange, options }) {
 function EditModal({ initial, onClose, onSave, suggestNo, saving, existing }) {
   const [f, setF] = useState(initial);
   const set = (k, v) => setF({ ...f, [k]: v });
+  // 시작일을 고르면 종료일을 1년 만기일로 함께 세팅(비우면 종료일도 비움)
+  const setValidFrom = (v) => setF({ ...f, valid_from: v, valid_to: oneYearLater(v) });
   const isInternal = f.category === "사내준법";
 
   // 구 형식 번호(예: 아정-준법-2026-…)는 접두어 고정에서 제외 — 기존 이력 보존
@@ -777,8 +789,13 @@ function EditModal({ initial, onClose, onSave, suggestNo, saving, existing }) {
           <Field label="신청일"><input type="date" value={f.applied_date} onChange={(e) => set("applied_date", e.target.value)} className={inp} /></Field>
           <Field label="심의일"><input type="date" value={f.reviewed_date} onChange={(e) => set("reviewed_date", e.target.value)} className={inp} /></Field>
           <Field label="심의결과"><Select value={f.result} onChange={(v) => set("result", v)} options={RESULTS} /></Field>
-          <Field label="유효기간 시작"><input type="date" value={f.valid_from} onChange={(e) => set("valid_from", e.target.value)} className={inp} /></Field>
-          <Field label="유효기간 종료"><input type="date" value={f.valid_to} onChange={(e) => set("valid_to", e.target.value)} className={inp} /></Field>
+          <Field label="유효기간 시작">
+            <input type="date" value={f.valid_from} onChange={(e) => setValidFrom(e.target.value)} className={inp} />
+          </Field>
+          <Field label="유효기간 종료">
+            <input type="date" value={f.valid_to} onChange={(e) => set("valid_to", e.target.value)} className={inp} />
+            <p className="mt-1 text-[11px] text-slate-400">시작일을 고르면 1년 만기일로 자동 입력됩니다. 필요하면 직접 수정하세요.</p>
+          </Field>
           <Field label="담당자"><input value={f.applicant} onChange={(e) => set("applicant", e.target.value)} className={inp} /></Field>
           <Field label="승인자 (준법감시인)">
             <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
